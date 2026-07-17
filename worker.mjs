@@ -5,6 +5,7 @@ import goWorker from "./build/worker.mjs";
 
 const ROOM_PATH = /^\/rooms\/([^/]+)\/connect$/;
 const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const MAX_IMAGE_SIZE = 90 * 1024 * 1024;
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), {
   status,
@@ -68,6 +69,42 @@ export class ChatRoom {
         text,
         sender: { id: sender.clientId, name: sender.name },
         timestamp: Date.now(),
+      });
+      return;
+    }
+
+    if (message.type === "file-offer") {
+      const fileId = String(message.fileId || "");
+      const fileName = String(message.name || "").slice(0, 255);
+      const size = Number(message.size);
+      const mimeType = String(message.mimeType || "application/octet-stream").slice(0, 127);
+      const preview = typeof message.preview === "string" ? message.preview : undefined;
+      if (!SAFE_ID.test(fileId) || !fileName || !Number.isSafeInteger(size) || size < 0) return;
+      if (mimeType.startsWith("image/") && size > MAX_IMAGE_SIZE) return;
+      if (preview && (preview.length > 160_000 || !/^data:image\/(?:jpeg|png|webp);base64,/.test(preview))) return;
+      const offer = {
+        type: "file-offer",
+        fileId,
+        name: fileName,
+        size,
+        mimeType,
+        ...(preview ? { preview } : {}),
+        sender: { id: sender.clientId, name: sender.name },
+        timestamp: Date.now(),
+      };
+      const target = typeof message.target === "string" ? this.find(message.target) : null;
+      if (target) this.send(target, offer);
+      else this.broadcast(offer);
+      return;
+    }
+
+    if (message.type === "file-request" && typeof message.target === "string") {
+      const fileId = String(message.fileId || "");
+      const target = this.find(message.target);
+      if (target && SAFE_ID.test(fileId)) this.send(target, {
+        type: "file-request",
+        fileId,
+        requester: { id: sender.clientId, name: sender.name },
       });
       return;
     }
